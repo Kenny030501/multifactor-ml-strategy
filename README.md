@@ -111,6 +111,8 @@ an identical window (both restricted to the same rebalance dates after the
 | **base+orth — EW composite** | 21.4% | **1.00** | **21.4%** | **−36%** |
 | base — IC-weighted | 3.7% | 0.14 | 27.5% | −49% |
 | base+orth — IC-weighted | 10.8% | 0.42 | 26.0% | −49% |
+| base — ICIR-weighted | 5.8% | 0.21 | 27.2% | −49% |
+| base+orth — ICIR-weighted | 8.6% | 0.34 | 25.2% | −52% |
 | base — GBR | 24.0% | 0.86 | 28.0% | −34% |
 | base+orth — GBR | 13.1% | 0.58 | 22.6% | −38% |
 
@@ -127,6 +129,8 @@ Long book, same identical-window protocol:
 | **base+orth — EW composite** | 13.8% | **1.70** | **8.1%** | **−8%** |
 | base — IC-weighted | 11.2% | 0.92 | 12.2% | −20% |
 | base+orth — IC-weighted | 10.2% | 1.01 | 10.1% | −10% |
+| base — ICIR-weighted | 11.1% | 0.92 | 12.1% | −19% |
+| base+orth — ICIR-weighted | 10.8% | 1.10 | 9.8% | −11% |
 | base — GBR | 15.8% | 1.31 | 12.0% | −14% |
 | base+orth — GBR | 8.2% | 0.82 | 9.9% | −15% |
 
@@ -136,10 +140,13 @@ Long book, same identical-window protocol:
   (Sharpe 0.90 → 1.00 on 30 names; **1.01 → 1.70** on 88 names). The lift is
   larger on the bigger universe — diversification needs breadth — and there the
   base+orth composite (Sharpe 1.70) *beats the strong benchmark* (1.52).
-- **IC-weighting did not beat plain equal-weighting in either universe.**
-  Weighting by IC *magnitude* amplifies the noise in the IC estimates; with few,
-  noisy factors the sign-only equal weight is more robust. An honest negative
-  result for the IC-weighting idea as implemented.
+- **Data-driven factor weighting did not beat plain equal-weighting.** Weighting
+  by IC *magnitude* amplifies noise in the IC estimates. **ICIR-weighting**
+  (mean IC / std IC) is a real improvement over IC-weighting — on the 88-stock
+  base+orth set it lifts Sharpe 1.01 → 1.10 with lower vol, exactly because it
+  penalises unstable factors — but neither beats the sign-only equal weight
+  (1.70). With few, correlated factors, estimating weights costs more in noise
+  than it gains; equal weight needs a larger, less-correlated factor set to lose.
 - **Long-short alpha is weak-to-negative** everywhere: these large-cap universes
   have low cross-sectional dispersion, so most of the edge (and a lot of market
   beta) lives in the long book, not in shorting the bottom.
@@ -149,10 +156,9 @@ Long book, same identical-window protocol:
 
 ## Possible next steps
 
-- Even bigger universe (hundreds of names) and a higher-dispersion universe
-  (small/mid caps) so the long-short book has something to short.
-- Try **ICIR-weighting** (mean IC / IC std) or shrinkage instead of raw
-  IC-magnitude weighting, which was too noisy here.
+- Higher-dispersion universe (small/mid caps) so the long-short book has
+  something to short — needs a price source the sandbox can reach (no committed
+  small-cap OHLCV dataset was found on GitHub for a usable period).
 - Fundamental factors (value, quality, earnings) for IC that is truly
   independent of the price/volume block — needs a fundamentals data source.
 - Transaction costs / turnover control, and risk-adjusted (vol-target) sizing.
