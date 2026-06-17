@@ -31,15 +31,24 @@ HORIZON = 20      # forward return / holding period, in trading days
 REBAL = 20        # rebalance every REBAL trading days (non-overlapping)
 TOP_K = 6         # long the top 6, short the bottom 6 (quintiles of 30)
 MIN_TRAIN = 252   # minimum training rows before a model is trusted
-FACTORS = ["mom_20", "rev_5", "vol_20"]
 PERIODS_PER_YEAR = 252 / HORIZON
+
+BASE = ["mom_20", "rev_5", "vol_20"]
+# Orthogonal residuals (built by factor_orthogonal.py) that pass the
+# independent-signal test. Each is already orthogonal to the base factors.
+ORTH = ["mom_120_orth", "mom_12_1_orth", "max_20_orth",
+        "illiq_20_orth", "hi_52w_orth", "dvol_20_orth"]
 
 
 # --------------------------------------------------------------------------- #
 # Data
 # --------------------------------------------------------------------------- #
-def load() -> pd.DataFrame:
-    df = pd.read_parquet("factor_panel.parquet")
+def load(features: list[str]) -> pd.DataFrame:
+    """Load the richest available panel and z-score the requested features."""
+    try:
+        df = pd.read_parquet("factor_panel_ext.parquet")
+    except FileNotFoundError:
+        df = pd.read_parquet("factor_panel.parquet")
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["date", "code"]).reset_index(drop=True)
 
@@ -50,8 +59,8 @@ def load() -> pd.DataFrame:
           .transform(lambda x: x.shift(-HORIZON) / x - 1)
     )
 
-    # Cross-sectional z-score of each factor within each date.
-    for f in FACTORS:
+    # Cross-sectional z-score of each feature within each date.
+    for f in features:
         g = df.groupby("date")[f]
         df[f + "_z"] = (df[f] - g.transform("mean")) / g.transform("std")
     return df
@@ -64,15 +73,15 @@ def _rebalance_dates(dates: np.ndarray) -> np.ndarray:
     return dates[::REBAL]
 
 
-def score_equal_weight(df: pd.DataFrame, rebal_dates) -> pd.DataFrame:
+def score_equal_weight(df: pd.DataFrame, rebal_dates, features) -> pd.DataFrame:
     """EW composite, factor signs from expanding-window IC (no look-ahead)."""
-    zcols = [f + "_z" for f in FACTORS]
+    zcols = [f + "_z" for f in features]
     out = []
     for t in rebal_dates:
         past = df[(df["date"] < t)].dropna(subset=zcols + ["fwd_ret"])
         # Direction of each factor learned only from realised history.
         signs = {}
-        for f, zc in zip(FACTORS, zcols):
+        for zc in zcols:
             ic = past[zc].corr(past["fwd_ret"], method="spearman") if len(past) else 0.0
             signs[zc] = np.sign(ic) if np.isfinite(ic) and ic != 0 else 1.0
         cur = df[(df["date"] == t)].dropna(subset=zcols).copy()
@@ -81,9 +90,9 @@ def score_equal_weight(df: pd.DataFrame, rebal_dates) -> pd.DataFrame:
     return pd.concat(out, ignore_index=True)
 
 
-def score_model(df: pd.DataFrame, rebal_dates, make_model) -> pd.DataFrame:
+def score_model(df: pd.DataFrame, rebal_dates, make_model, features) -> pd.DataFrame:
     """Walk-forward supervised model retrained at each rebalance date."""
-    zcols = [f + "_z" for f in FACTORS]
+    zcols = [f + "_z" for f in features]
     out = []
     for t in rebal_dates:
         # Train only on labels whose forward window is already realised by t.
@@ -160,31 +169,57 @@ def metrics(period_ret: pd.Series) -> dict:
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
-def main() -> None:
-    df = load()
-    dates = np.sort(df["date"].unique())
-    rebal = _rebalance_dates(dates)
-    print(f"Universe: {df['code'].nunique()} stocks | "
-          f"{pd.Timestamp(dates[0]).date()} -> {pd.Timestamp(dates[-1]).date()}")
-    print(f"Rebalance every {REBAL}d | hold {HORIZON}d | long/short top/bottom {TOP_K}"
-          f" | {len(rebal)} rebalance dates\n")
-
-    signals = {
-        "EW_composite": score_equal_weight(df, rebal),
-        "Ridge":        score_model(df, rebal, lambda: Ridge(alpha=10.0)),
-        "GBR":          score_model(
-            df, rebal,
-            lambda: GradientBoostingRegressor(
-                n_estimators=200, max_depth=2, learning_rate=0.03,
-                subsample=0.7, random_state=42)),
+def _models():
+    return {
+        "EW_composite": ("ew", None),
+        "Ridge":        ("model", lambda: Ridge(alpha=10.0)),
+        "GBR":          ("model", lambda: GradientBoostingRegressor(
+            n_estimators=200, max_depth=2, learning_rate=0.03,
+            subsample=0.7, random_state=42)),
     }
 
-    bench = benchmark_returns(df, rebal)
-    rows = {"Benchmark(EW all)": metrics(bench)}
-    for name, sc in signals.items():
+
+def run_feature_set(df: pd.DataFrame, rebal, features: list[str]) -> dict:
+    """Backtest every model on one feature set; return metrics rows."""
+    rows = {}
+    for name, (kind, maker) in _models().items():
+        sc = (score_equal_weight(df, rebal, features) if kind == "ew"
+              else score_model(df, rebal, maker, features))
         long_r, ls_r = portfolio_returns(sc)
         rows[f"{name} | long top{TOP_K}"] = metrics(long_r)
         rows[f"{name} | long-short"] = metrics(ls_r)
+    return rows
+
+
+def main() -> None:
+    feature_sets = {
+        "base(3)": BASE,
+        "base+orth(9)": BASE + ORTH,
+    }
+    df = load(BASE + ORTH)  # z-score every feature once
+    dates = np.sort(df["date"].unique())
+    rebal = _rebalance_dates(dates)
+
+    # Fair comparison: both feature sets must trade over the SAME dates. The
+    # orthogonal factors need a long warm-up (252d), so restrict every model to
+    # rebalance dates where the FULL feature set has a usable cross-section.
+    ext_z = [f + "_z" for f in BASE + ORTH]
+    valid = {t for t in rebal
+             if df[(df["date"] == t)].dropna(subset=ext_z).shape[0] >= 2 * TOP_K}
+    rebal = np.array([t for t in rebal if t in valid])
+
+    print(f"Universe: {df['code'].nunique()} stocks | "
+          f"{pd.Timestamp(dates[0]).date()} -> {pd.Timestamp(dates[-1]).date()}")
+    print(f"Rebalance every {REBAL}d | hold {HORIZON}d | long/short top/bottom {TOP_K}")
+    print(f"Common backtest window (after 252d warm-up): "
+          f"{pd.Timestamp(rebal[0]).date()} -> {pd.Timestamp(rebal[-1]).date()} "
+          f"| {len(rebal)} rebalance dates")
+    print(f"Feature sets: base={BASE}\n              orth-add={ORTH}\n")
+
+    rows = {"Benchmark(EW all)": metrics(benchmark_returns(df, rebal))}
+    for set_name, feats in feature_sets.items():
+        for label, m in run_feature_set(df, rebal, feats).items():
+            rows[f"[{set_name}] {label}"] = m
 
     table = pd.DataFrame(rows).T
     pct = ["total_return", "ann_return", "ann_vol", "max_drawdown", "win_rate"]
@@ -192,11 +227,11 @@ def main() -> None:
         table[c] = (table[c] * 100).map(lambda v: f"{v:6.2f}%")
     table["sharpe"] = table["sharpe"].map(lambda v: f"{v:5.2f}")
     table["n_periods"] = table["n_periods"].astype(int)
-    pd.set_option("display.width", 200)
+    pd.set_option("display.width", 220)
     print("=== Backtest results (out-of-sample, walk-forward) ===")
     print(table.to_string())
-    print("\nNote: benchmark/long are directional (carry market beta); the "
-          "long-short row isolates factor alpha.")
+    print("\nNote: long carries market beta; long-short isolates factor alpha.")
+    print("Compare [base(3)] vs [base+orth(9)] to see the orthogonal factors' lift.")
 
 
 if __name__ == "__main__":
