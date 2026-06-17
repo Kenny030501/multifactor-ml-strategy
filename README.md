@@ -26,6 +26,7 @@ rigorous out-of-sample backtesting.
 | 3. Build orthogonal factors | `factor_orthogonal.py` | `factor_panel_ext.parquet` |
 | 4. Backtest the strategy | `backtest.py` | console report |
 | 5. Cost / turnover check | `transaction_costs.py` | console report |
+| 6. Alpha/beta + equity curve | `report.py` | `equity_curve_*.png` |
 | (opt) Larger universe | `build_universe.py` | `factor_panel_large_ext.parquet` |
 
 `factor_lib.py` holds the shared, universe-agnostic factor definitions used by
@@ -170,6 +171,29 @@ long book after realistic per-side costs:
 
 The edge **survives** realistic costs (≈10 bps/side is reasonable for liquid US
 large caps) — the backtest is not just paying itself in turnover.
+
+## Alpha vs beta (`report.py`)
+
+A high Sharpe on a long book can just be market exposure. Regressing each
+strategy's per-rebalance return on the benchmark (`r = α + β·r_bench + e`)
+separates skill from beta:
+
+| 88-stock long book | ann. α | β | α t-stat | info ratio |
+|--------------------|-------:|---:|--------:|-----------:|
+| EW base(3) | **−3.5%** | 1.24 | −1.11 | −0.61 |
+| EW base+orth(9) | **+4.4%** | 0.71 | 1.45 | 0.80 |
+
+- The **orthogonal factors are the actual source of alpha.** Base factors alone
+  have *negative* alpha on the 88-stock universe — they are essentially 1.24×
+  leveraged market beta. Adding the orthogonal factors flips alpha positive
+  (+4.4%), cuts beta to 0.71, and lifts the information ratio to 0.80. That, not
+  diversification alone, is why the Sharpe improved.
+- **Honest caveat:** the alpha t-stats (1.1–1.5) are *not* significant at the 95%
+  level over ~4 years / 50 rebalances. The information ratio is economically
+  meaningful but a longer sample is needed to confirm the alpha is real.
+
+![88-stock equity curve](equity_curve_88stocks.png)
+![30-stock equity curve](equity_curve_30stocks.png)
 
 ## Possible next steps
 
