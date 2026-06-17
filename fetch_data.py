@@ -1,6 +1,5 @@
 import akshare as ak
 
-# 拉贵州茅台(600519)的日线数据,前复权
 df = ak.stock_zh_a_hist(
     symbol="600519",
     period="daily",
@@ -9,7 +8,7 @@ df = ak.stock_zh_a_hist(
     adjust="qfq"
 )
 
-print(df.head())          # 看前5行长什么样
+print(df.head())         
 print(f"\n共 {len(df)} 行数据")
 print(f"\n列名:{list(df.columns)}")
 
