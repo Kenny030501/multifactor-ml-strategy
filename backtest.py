@@ -30,7 +30,7 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor
 
 HORIZON = 20      # forward return / holding period, in trading days
 REBAL = 20        # rebalance every REBAL trading days (non-overlapping)
@@ -222,9 +222,9 @@ def _models():
         "EW_composite": ("ew", None),
         "IC_weighted":  ("icw", None),
         "Ridge":        ("model", lambda: Ridge(alpha=10.0)),
-        "GBR":          ("model", lambda: GradientBoostingRegressor(
-            n_estimators=200, max_depth=2, learning_rate=0.03,
-            subsample=0.7, random_state=42)),
+        "GBR":          ("model", lambda: HistGradientBoostingRegressor(
+            max_iter=200, max_depth=2, learning_rate=0.03,
+            max_leaf_nodes=8, random_state=42)),
     }
 
 
