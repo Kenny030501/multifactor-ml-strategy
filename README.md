@@ -1,206 +1,166 @@
-# multifactor-ml-strategy
+# Multi-Factor Equity Selection — a rigorously backtested study
 
-Multi-factor equity selection strategy with ML-based signal synthesis and
-rigorous out-of-sample backtesting.
+A cross-sectional, multi-factor stock-selection strategy built end to end:
+factor construction → information-coefficient validation → **orthogonalisation** →
+strictly walk-forward backtesting → transaction-cost and alpha/beta
+decomposition → parameter-robustness sweep.
 
-## Universe & data
+The emphasis is **process and honesty, not headline returns**. Every result
+below is out-of-sample (no look-ahead), and the negative results are reported as
+prominently as the positive ones. A companion [`LIMITATIONS.md`](LIMITATIONS.md)
+states exactly what this study does and does not establish.
 
-- **Primary: 30 US large caps** (AAPL, MSFT, NVDA, GOOGL, AMZN, JPM, …), daily
-  OHLCV, **2020-01-02 → 2024-12-30** (`data_panel.parquet`).
-- **Larger: 88 US names**, **2012–2017** (`data_panel_large.parquet`), built by
-  `build_universe.py` from a public GitHub-hosted dataset — used to test the
-  strategy at ~3× scale on an independent period.
-- Stored as a long panel: one row per `(date, code)`.
+---
 
-> Data is fetched separately (e.g. via yfinance on Colab). The remote build
-> environment cannot reach market-data APIs, so the panel is committed as a
-> parquet file. `panel_data.py` is a **deprecated** synthetic scaffold — do not
-> run it (it is guarded to avoid overwriting the real panel).
+## Key findings (read first)
 
-## Pipeline
+1. **Simple beats complex.** A sign-only **equal-weight composite** of the
+   factors out-performs IC-weighting, ICIR-weighting, Ridge, and gradient-boosted
+   trees on a 30–88 name cross-section. Flexible models mostly fit noise on a
+   small universe.
+2. **The alpha comes from the orthogonal factors, not from beta.** On the
+   88-stock universe the three base factors alone have *negative* alpha (they are
+   ~1.24× leveraged market beta). Adding the orthogonalised factors flips alpha to
+   **+4.4%/yr, beta 0.71, information ratio 0.80** — the source of skill is the
+   incremental orthogonal signal.
+3. **The alpha is not yet statistically significant.** Its *t*-stat is 1.1–1.5
+   (< 2) over ~50 monthly rebalances. The strategy survives realistic transaction
+   costs and is stable across parameters, but the sample is too short to claim a
+   confirmed edge — see [`LIMITATIONS.md`](LIMITATIONS.md).
 
-| Step | Script | Output |
-|------|--------|--------|
-| 1. Build factor panel | `factor_panel.py` | `factor_panel.parquet` |
-| 2. Validate factors (rank IC) | `compute_ic.py` | console report |
-| 3. Build orthogonal factors | `factor_orthogonal.py` | `factor_panel_ext.parquet` |
-| 4. Backtest the strategy | `backtest.py` | console report |
-| 5. Cost / turnover check | `transaction_costs.py` | console report |
-| 6. Alpha/beta + equity curve | `report.py` | `equity_curve_*.png` |
-| 7. Parameter robustness | `robustness.py` | console report |
-| (opt) Larger universe | `build_universe.py` | `factor_panel_large_ext.parquet` |
+---
 
-`factor_lib.py` holds the shared, universe-agnostic factor definitions used by
-both the 30-stock flow and the larger-universe flow.
+## Data
 
-```bash
-pip install pandas numpy scikit-learn pyarrow
-python factor_panel.py       # base factors: mom_20, rev_5, vol_20
-python compute_ic.py         # are the base factors predictive cross-sectionally?
-python factor_orthogonal.py  # build + test orthogonal price/volume factors
-python backtest.py           # walk-forward backtest, base vs base+orthogonal
+| Universe | Names | Period | Source |
+|----------|------:|--------|--------|
+| Primary | 30 US large caps | 2020-01-02 → 2024-12-30 | yfinance (`data_panel.parquet`) |
+| Larger | 88 US names | 2012 → 2017 | StockNet, GitHub-hosted (`data_panel_large.parquet`) |
 
-# Larger universe (88 real US names from a GitHub-hosted dataset):
-python build_universe.py
-PANEL=factor_panel_large_ext.parquet python backtest.py
-```
+Daily OHLCV, stored as a long panel (one row per `(date, code)`). The two
+universes do not overlap in time and are used as **independent** tests of the
+same methodology, not as one pooled sample. Data is OHLCV-only — there are no
+fundamentals, which bounds how much truly independent signal can exist.
 
-## Factors
+---
 
-**Base** factors (`factor_panel.py`), computed per stock so windows never cross
-tickers:
+## Methodology
 
-- `mom_20` — 20-day price momentum.
-- `rev_5`  — 5-day return (short-term reversal proxy).
-- `vol_20` — 20-day realised volatility of daily returns.
+A six-stage pipeline, each stage a small script; `factor_lib.py` holds the
+shared, universe-agnostic factor definitions.
 
-**Orthogonal** candidates (`factor_orthogonal.py`) — all price/volume based
-(no fundamentals are available). Each candidate is z-scored cross-sectionally,
-then **regressed on the base factors within each date and replaced by its
-residual**, so the part it shares with the base factors is removed and only its
-independent information remains. A factor is kept if that residual still has a
-significant rank IC:
+**1 — Factors.** Three base price/volume factors (`mom_20`, `rev_5`, `vol_20`),
+computed per stock so windows never cross tickers.
 
-| candidate | what it is | raw IC (t) | orthogonal IC (t) |
-|-----------|------------|-----------:|------------------:|
-| `illiq_20`  | Amihud illiquidity | −0.067 (−8.3) | **−0.050 (−7.4)** |
-| `mom_120`   | 6-month momentum | +0.045 (+5.1) | **+0.025 (+3.6)** |
-| `mom_12_1`  | 12-1 momentum (skip last month) | +0.038 (+4.2) | **+0.026 (+3.5)** |
-| `hi_52w`    | 52-week-high proximity | +0.007 (+0.7) | **+0.032 (+4.5)** |
-| `max_20`    | lottery / max daily return | +0.022 (+2.7) | **−0.030 (−5.8)** |
-| `dvol_20`   | downside volatility | +0.027 (+3.5) | +0.019 (+3.3) |
-| `skew_60`   | 60-day return skewness | +0.000 (0.1) | −0.007 (−1.1) — dropped |
+**2 — IC validation** (`compute_ic.py`). The relevant question for *selection* is
+cross-sectional: on each date, does ranking stocks by the factor rank them by
+forward return? Measured by the daily Spearman rank IC vs the forward 20-day
+return. On the primary universe only volatility carries a stable signal
+(mean IC +0.040), momentum and short reversal are weak — an honest first result.
 
-Orthogonalisation is the point: `hi_52w` looks dead raw (t 0.7) but has a strong
-**independent** signal once its overlap with momentum/vol is removed (t +4.5);
-`max_20` even flips sign — the classic lottery effect only appears after
-controlling for volatility (with which it correlates 0.81).
+**3 — Orthogonalisation** (`factor_orthogonal.py`). Seven candidate factors are
+each z-scored cross-sectionally, **regressed on the base factors within each
+date, and replaced by the residual**, so only the part *not* already explained by
+the base set remains. A candidate is kept only if its residual still has a
+significant rank IC. This is the methodological centrepiece:
 
-## Methodology (why it is honest out-of-sample)
+| candidate | raw IC (t) | orthogonal IC (t) | note |
+|-----------|-----------:|------------------:|------|
+| `illiq_20` (Amihud illiquidity) | −0.067 (−8.3) | **−0.050 (−7.4)** | strongest independent signal |
+| `mom_120` (6-month momentum) | +0.045 (+5.1) | **+0.025 (+3.6)** | adds to 20-day momentum |
+| `mom_12_1` (12-1 momentum) | +0.038 (+4.2) | **+0.026 (+3.5)** | nearly orthogonal already |
+| `hi_52w` (52-week-high proximity) | +0.007 (+0.7) | **+0.032 (+4.5)** | hidden until orthogonalised |
+| `max_20` (lottery) | +0.022 (+2.7) | **−0.030 (−5.8)** | flips sign once vol is removed |
+| `dvol_20` (downside vol) | +0.027 (+3.5) | +0.019 (+3.3) | kept |
+| `skew_60` (return skew) | +0.000 (0.1) | −0.007 (−1.1) | **dropped** |
 
-- **Cross-sectional** problem: on each date, factors are z-scored across the 30
-  stocks, then used to rank stocks against each other.
-- **Rank IC** (`compute_ic.py`): daily Spearman correlation between each factor
-  and the forward 20-day return — measures real cross-sectional edge.
-- **Walk-forward, no look-ahead** (`backtest.py`): at each rebalance the model
-  sees only factor values observable that day and training labels whose forward
-  window has already fully realised. Rebalance every 20 trading days; hold 20.
-- **Portfolio**: equal-weight the top quintile (long book); long-short = top
-  quintile − bottom quintile. Book size scales with the universe, so the same
-  code runs on 30 or hundreds of names. Benchmark = equal-weight all stocks.
-- Four signal models: equal-weight composite (factor signs from expanding-window
-  IC), **IC-weighted composite** (weight each factor by its expanding-window mean
-  IC — sign *and* magnitude), Ridge, and gradient-boosted trees.
+`hi_52w` looks dead in raw form but has a strong independent signal once its
+overlap with momentum/vol is removed; `max_20` reproduces the classic lottery
+anomaly only after controlling for volatility (correlation 0.81).
 
-## Results (2020–2024, out-of-sample)
+**4 — Walk-forward backtest** (`backtest.py`). At each rebalance the model sees
+only factors observable that day and labels whose forward window has already
+realised — no look-ahead. Rebalance every 20 trading days, hold 20; equal-weight
+the top quintile (long book), long-short = top − bottom quintile; benchmark =
+equal-weight universe. Five synthesis models are compared: equal-weight, IC-
+weighted, ICIR-weighted, Ridge, and gradient-boosted trees. The base-vs-
+orthogonal comparison uses an identical, warm-up-aligned window so it is not
+confounded by period.
 
-Rank IC — only volatility carries a stable cross-sectional signal in this
-universe/period (high-vol names led the post-2020 tech bull):
+**5 — Cost & risk decomposition** (`transaction_costs.py`, `report.py`).
+Turnover and net-of-cost Sharpe; then a CAPM regression on the benchmark to
+separate genuine alpha from market beta.
 
-| factor | mean IC | t-stat |
-|--------|--------:|-------:|
-| vol_20 | **+0.040** | **+4.59** |
-| mom_20 | −0.010 | −1.26 |
-| rev_5  | +0.003 | +0.42 |
+**6 — Robustness** (`robustness.py`). Sweep book size and horizon to check the
+result is not a single lucky parameter choice.
 
-Backtest — **base (3 factors) vs base+orthogonal (9 factors)**, long book, over
-an identical window (both restricted to the same rebalance dates after the
-252-day warm-up, so the comparison is not confounded by the period):
+---
 
-| strategy (same 49-period window) | ann. return | Sharpe | ann. vol | max DD |
-|----------------------------------|------------:|-------:|---------:|-------:|
-| Benchmark (EW all 30) | 14.6% | 0.82 | 17.8% | −27% |
-| base — EW composite | 26.9% | 0.90 | 29.9% | −41% |
-| **base+orth — EW composite** | 21.4% | **1.00** | **21.4%** | **−36%** |
-| base — IC-weighted | 3.7% | 0.14 | 27.5% | −49% |
-| base+orth — IC-weighted | 10.8% | 0.42 | 26.0% | −49% |
-| base — ICIR-weighted | 5.8% | 0.21 | 27.2% | −49% |
-| base+orth — ICIR-weighted | 8.6% | 0.34 | 25.2% | −52% |
-| base — GBR | 24.0% | 0.86 | 28.0% | −34% |
-| base+orth — GBR | 13.1% | 0.58 | 22.6% | −38% |
+## Results
 
-## Larger universe (88 stocks, 2013–2017)
+### Backtest — base (3 factors) vs base+orthogonal (9), long book
 
-`build_universe.py` pulls a real 88-stock US panel (StockNet dataset, committed
-on GitHub and reachable from the sandbox) — ~3× the names, an independent period.
-Long book, same identical-window protocol:
+Both universes use identical, warm-up-aligned windows.
 
-| strategy (88 stocks, 49-period window) | ann. return | Sharpe | ann. vol | max DD |
-|----------------------------------------|------------:|-------:|---------:|-------:|
-| Benchmark (EW all 88) | 12.8% | 1.52 | 8.4% | −10% |
-| base — EW composite | 12.0% | 1.01 | 11.9% | −15% |
-| **base+orth — EW composite** | 13.8% | **1.70** | **8.1%** | **−8%** |
-| base — IC-weighted | 11.2% | 0.92 | 12.2% | −20% |
-| base+orth — IC-weighted | 10.2% | 1.01 | 10.1% | −10% |
-| base — ICIR-weighted | 11.1% | 0.92 | 12.1% | −19% |
-| base+orth — ICIR-weighted | 10.8% | 1.10 | 9.8% | −11% |
-| base — GBR | 15.8% | 1.31 | 12.0% | −14% |
-| base+orth — GBR | 8.2% | 0.82 | 9.9% | −15% |
+**Primary universe — 30 stocks, 2021–2024:**
 
-**Takeaways (honest, across both universes):**
+| strategy | ann. ret | Sharpe | vol | max DD |
+|----------|---------:|-------:|----:|-------:|
+| Benchmark (EW all) | 14.6% | 0.82 | 17.8% | −27% |
+| EW base | 26.9% | 0.90 | 29.9% | −41% |
+| **EW base+orth** | 21.4% | **1.00** | 21.4% | −36% |
+| IC-weighted base+orth | 10.8% | 0.42 | 26.0% | −49% |
+| ICIR-weighted base+orth | 8.6% | 0.34 | 25.2% | −52% |
+| GBR base+orth | 13.1% | 0.58 | 22.6% | −38% |
 
-- **Orthogonal factors help the equal-weight long composite in both universes**
-  (Sharpe 0.90 → 1.00 on 30 names; **1.01 → 1.70** on 88 names). The lift is
-  larger on the bigger universe — diversification needs breadth — and there the
-  base+orth composite (Sharpe 1.70) *beats the strong benchmark* (1.52).
-- **Data-driven factor weighting did not beat plain equal-weighting.** Weighting
-  by IC *magnitude* amplifies noise in the IC estimates. **ICIR-weighting**
-  (mean IC / std IC) is a real improvement over IC-weighting — on the 88-stock
-  base+orth set it lifts Sharpe 1.01 → 1.10 with lower vol, exactly because it
-  penalises unstable factors — but neither beats the sign-only equal weight
-  (1.70). With few, correlated factors, estimating weights costs more in noise
-  than it gains; equal weight needs a larger, less-correlated factor set to lose.
-- **Long-short alpha is weak-to-negative** everywhere: these large-cap universes
-  have low cross-sectional dispersion, so most of the edge (and a lot of market
-  beta) lives in the long book, not in shorting the bottom.
-- A bigger universe sharply raises the benchmark's Sharpe (less idiosyncratic
-  noise) and makes the orthogonal-factor edge clearer — breadth matters more than
-  model complexity.
+**Larger universe — 88 stocks, 2013–2017:**
 
-## Transaction costs (`transaction_costs.py`)
+| strategy | ann. ret | Sharpe | vol | max DD |
+|----------|---------:|-------:|----:|-------:|
+| Benchmark (EW all) | 12.8% | 1.52 | 8.4% | −10% |
+| EW base | 12.0% | 1.01 | 11.9% | −15% |
+| **EW base+orth** | 13.8% | **1.70** | 8.1% | −8% |
+| IC-weighted base+orth | 10.2% | 1.01 | 10.1% | −10% |
+| ICIR-weighted base+orth | 10.8% | 1.10 | 9.8% | −11% |
+| GBR base+orth | 8.2% | 0.82 | 9.9% | −15% |
 
-A Sharpe means nothing without knowing the turnover behind it. The equal-weight
-composite turns over ~8× per year (≈66–70% of the book replaced each monthly
-rebalance — moderate for a monthly signal). Net Sharpe of the **base+orth**
-long book after realistic per-side costs:
+- Orthogonal factors lift the equal-weight long Sharpe in **both** universes
+  (0.90→1.00 and **1.01→1.70**); on the larger universe the composite beats a
+  strong benchmark.
+- **Data-driven weighting does not beat equal weight.** ICIR (mean IC / std IC)
+  is a genuine improvement over IC-magnitude weighting (88-stock 1.01→1.10, lower
+  vol) because it penalises unstable factors — but neither beats the sign-only
+  equal weight. With few correlated factors, estimating weights costs more noise
+  than it gains.
+- **Long-short alpha is weak-to-negative** everywhere: large-cap universes have
+  low dispersion, so the edge lives in the long book (and carries market beta).
 
-| cost / side | 30-stock net Sharpe | 88-stock net Sharpe |
-|-------------|--------------------:|--------------------:|
+### Transaction costs
+
+The equal-weight composite turns over ~8×/yr (≈66–70% of the book per monthly
+rebalance). Net Sharpe of the base+orth long book:
+
+| cost / side | 30-stock | 88-stock |
+|-------------|---------:|---------:|
 | 0 bps (gross) | 1.00 | 1.70 |
 | 10 bps | 0.91 | 1.45 |
 | 20 bps | 0.82 | 1.22 |
 
-The edge **survives** realistic costs (≈10 bps/side is reasonable for liquid US
-large caps) — the backtest is not just paying itself in turnover.
+The edge survives realistic costs — it is not an artefact of turnover.
 
-## Alpha vs beta (`report.py`)
+### Alpha vs beta (88-stock long book)
 
-A high Sharpe on a long book can just be market exposure. Regressing each
-strategy's per-rebalance return on the benchmark (`r = α + β·r_bench + e`)
-separates skill from beta:
-
-| 88-stock long book | ann. α | β | α t-stat | info ratio |
-|--------------------|-------:|---:|--------:|-----------:|
-| EW base(3) | **−3.5%** | 1.24 | −1.11 | −0.61 |
+| | ann. α | β | α t-stat | info ratio |
+|--|--:|--:|--:|--:|
+| EW base(3) | −3.5% | 1.24 | −1.11 | −0.61 |
 | EW base+orth(9) | **+4.4%** | 0.71 | 1.45 | 0.80 |
 
-- The **orthogonal factors are the actual source of alpha.** Base factors alone
-  have *negative* alpha on the 88-stock universe — they are essentially 1.24×
-  leveraged market beta. Adding the orthogonal factors flips alpha positive
-  (+4.4%), cuts beta to 0.71, and lifts the information ratio to 0.80. That, not
-  diversification alone, is why the Sharpe improved.
-- **Honest caveat:** the alpha t-stats (1.1–1.5) are *not* significant at the 95%
-  level over ~4 years / 50 rebalances. The information ratio is economically
-  meaningful but a longer sample is needed to confirm the alpha is real.
+The orthogonal factors convert leveraged beta into positive, lower-beta alpha —
+but the α *t*-stat (1.45) is **not** significant at 95%.
 
 ![88-stock equity curve](equity_curve_88stocks.png)
-![30-stock equity curve](equity_curve_30stocks.png)
 
-## Robustness (`robustness.py`)
-
-Sweeping the two main design knobs for the EW base+orth long book — Sharpe is
-stable and positive across the whole grid (88-stock universe), so the headline
-1.70 is not a single lucky parameter choice:
+### Robustness (88-stock EW base+orth, Sharpe)
 
 | top frac \ horizon | 10d | 20d | 40d |
 |--------------------|----:|----:|----:|
@@ -208,13 +168,55 @@ stable and positive across the whole grid (88-stock universe), so the headline
 | **top 20%** | 1.31 | **1.70** | 1.85 |
 | top 30% | 1.26 | 1.67 | 1.84 |
 
-(top 50% is degenerate — a long-short book then needs the entire universe.)
+Stable and positive across the grid — the headline number is not cherry-picked.
 
-## Possible next steps
+---
 
-- Higher-dispersion universe (small/mid caps) so the long-short book has
-  something to short — needs a price source the sandbox can reach (no committed
-  small-cap OHLCV dataset was found on GitHub for a usable period).
-- Fundamental factors (value, quality, earnings) for IC that is truly
-  independent of the price/volume block — needs a fundamentals data source.
-- Transaction costs / turnover control, and risk-adjusted (vol-target) sizing.
+## Repository layout
+
+| File | Role |
+|------|------|
+| `factor_lib.py` | Shared, universe-agnostic factor + orthogonalisation logic |
+| `factor_panel.py` | Build base factors for the primary universe |
+| `compute_ic.py` | Rank-IC factor validation |
+| `factor_orthogonal.py` | Build & test orthogonal factors → `factor_panel_ext.parquet` |
+| `build_universe.py` | Download the 88-stock universe → `factor_panel_large_ext.parquet` |
+| `backtest.py` | Walk-forward backtest, 5 synthesis models, base vs base+orth |
+| `transaction_costs.py` | Turnover & net-of-cost Sharpe |
+| `report.py` | Alpha/beta decomposition + equity-curve plots |
+| `robustness.py` | Parameter sweep |
+| `LIMITATIONS.md` | Honest statistical / data / methodological caveats |
+
+`*.parquet` are committed data/factor panels; `equity_curve_*.png` are generated
+plots. (`panel_data.py`, `factor_momentum.py`, `factor_reversal.py`,
+`validate_factor.py`, `train_model.py` are early single-stock scaffolds, kept for
+history and superseded by the panel pipeline.)
+
+## How to run
+
+```bash
+pip install pandas numpy scikit-learn pyarrow matplotlib
+
+# Primary 30-stock universe
+python factor_panel.py
+python compute_ic.py
+python factor_orthogonal.py
+python backtest.py
+python transaction_costs.py
+python report.py
+python robustness.py
+
+# Larger 88-stock universe (same scripts via the PANEL env var)
+python build_universe.py
+PANEL=factor_panel_large_ext.parquet python backtest.py
+PANEL=factor_panel_large_ext.parquet python report.py
+```
+
+## Limitations
+
+See [`LIMITATIONS.md`](LIMITATIONS.md) for the full treatment: the alpha is not
+statistically significant (t < 2, ~50 periods), IC t-stats are inflated by
+overlapping returns, factor selection used full-sample IC, the universes are
+small / large-cap / survivorship-biased and span only bull regimes, and the data
+is OHLCV-only. The document also lists exactly how each issue would be fixed with
+point-in-time, fundamentals-inclusive, multi-regime data.
