@@ -27,6 +27,7 @@ rigorous out-of-sample backtesting.
 | 4. Backtest the strategy | `backtest.py` | console report |
 | 5. Cost / turnover check | `transaction_costs.py` | console report |
 | 6. Alpha/beta + equity curve | `report.py` | `equity_curve_*.png` |
+| 7. Parameter robustness | `robustness.py` | console report |
 | (opt) Larger universe | `build_universe.py` | `factor_panel_large_ext.parquet` |
 
 `factor_lib.py` holds the shared, universe-agnostic factor definitions used by
@@ -194,6 +195,20 @@ separates skill from beta:
 
 ![88-stock equity curve](equity_curve_88stocks.png)
 ![30-stock equity curve](equity_curve_30stocks.png)
+
+## Robustness (`robustness.py`)
+
+Sweeping the two main design knobs for the EW base+orth long book — Sharpe is
+stable and positive across the whole grid (88-stock universe), so the headline
+1.70 is not a single lucky parameter choice:
+
+| top frac \ horizon | 10d | 20d | 40d |
+|--------------------|----:|----:|----:|
+| top 10% | 1.29 | 1.53 | 1.28 |
+| **top 20%** | 1.31 | **1.70** | 1.85 |
+| top 30% | 1.26 | 1.67 | 1.84 |
+
+(top 50% is degenerate — a long-short book then needs the entire universe.)
 
 ## Possible next steps
 
