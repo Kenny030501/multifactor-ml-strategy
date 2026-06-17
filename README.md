@@ -5,8 +5,11 @@ rigorous out-of-sample backtesting.
 
 ## Universe & data
 
-- **30 US large caps** (AAPL, MSFT, NVDA, GOOGL, AMZN, JPM, …), daily OHLCV.
-- **2020-01-02 → 2024-12-30**, 1257 trading days per name (`data_panel.parquet`).
+- **Primary: 30 US large caps** (AAPL, MSFT, NVDA, GOOGL, AMZN, JPM, …), daily
+  OHLCV, **2020-01-02 → 2024-12-30** (`data_panel.parquet`).
+- **Larger: 88 US names**, **2012–2017** (`data_panel_large.parquet`), built by
+  `build_universe.py` from a public GitHub-hosted dataset — used to test the
+  strategy at ~3× scale on an independent period.
 - Stored as a long panel: one row per `(date, code)`.
 
 > Data is fetched separately (e.g. via yfinance on Colab). The remote build
@@ -22,6 +25,10 @@ rigorous out-of-sample backtesting.
 | 2. Validate factors (rank IC) | `compute_ic.py` | console report |
 | 3. Build orthogonal factors | `factor_orthogonal.py` | `factor_panel_ext.parquet` |
 | 4. Backtest the strategy | `backtest.py` | console report |
+| (opt) Larger universe | `build_universe.py` | `factor_panel_large_ext.parquet` |
+
+`factor_lib.py` holds the shared, universe-agnostic factor definitions used by
+both the 30-stock flow and the larger-universe flow.
 
 ```bash
 pip install pandas numpy scikit-learn pyarrow
@@ -29,6 +36,10 @@ python factor_panel.py       # base factors: mom_20, rev_5, vol_20
 python compute_ic.py         # are the base factors predictive cross-sectionally?
 python factor_orthogonal.py  # build + test orthogonal price/volume factors
 python backtest.py           # walk-forward backtest, base vs base+orthogonal
+
+# Larger universe (88 real US names from a GitHub-hosted dataset):
+python build_universe.py
+PANEL=factor_panel_large_ext.parquet python backtest.py
 ```
 
 ## Factors
@@ -71,10 +82,12 @@ controlling for volatility (with which it correlates 0.81).
 - **Walk-forward, no look-ahead** (`backtest.py`): at each rebalance the model
   sees only factor values observable that day and training labels whose forward
   window has already fully realised. Rebalance every 20 trading days; hold 20.
-- **Portfolio**: equal-weight the top 6 (long book); long-short = top 6 − bottom
-  6. Benchmark = equal-weight all 30.
-- Three signal models: equal-weight composite (factor signs from expanding-window
-  IC), Ridge, and gradient-boosted trees.
+- **Portfolio**: equal-weight the top quintile (long book); long-short = top
+  quintile − bottom quintile. Book size scales with the universe, so the same
+  code runs on 30 or hundreds of names. Benchmark = equal-weight all stocks.
+- Four signal models: equal-weight composite (factor signs from expanding-window
+  IC), **IC-weighted composite** (weight each factor by its expanding-window mean
+  IC — sign *and* magnitude), Ridge, and gradient-boosted trees.
 
 ## Results (2020–2024, out-of-sample)
 
@@ -87,39 +100,59 @@ universe/period (high-vol names led the post-2020 tech bull):
 | mom_20 | −0.010 | −1.26 |
 | rev_5  | +0.003 | +0.42 |
 
-Backtest — **base (3 factors) vs base+orthogonal (9 factors)** over an identical
-window (both restricted to the same rebalance dates after the 252-day warm-up,
-so the comparison is not confounded by the period):
+Backtest — **base (3 factors) vs base+orthogonal (9 factors)**, long book, over
+an identical window (both restricted to the same rebalance dates after the
+252-day warm-up, so the comparison is not confounded by the period):
 
 | strategy (same 49-period window) | ann. return | Sharpe | ann. vol | max DD |
 |----------------------------------|------------:|-------:|---------:|-------:|
 | Benchmark (EW all 30) | 14.6% | 0.82 | 17.8% | −27% |
-| base — EW composite, long top 6 | 26.9% | 0.90 | 29.9% | −41% |
-| **base+orth — EW composite, long top 6** | 21.4% | **1.00** | **21.4%** | **−36%** |
-| base — GBR, long top 6 | 20.4% | 0.71 | 28.6% | −39% |
-| base+orth — GBR, long top 6 | 16.8% | 0.64 | 26.2% | −40% |
-| base — EW composite, long-short | 17.4% | 0.61 | 28.5% | −36% |
-| base+orth — EW composite, long-short | 2.4% | 0.12 | 20.8% | −44% |
+| base — EW composite | 26.9% | 0.90 | 29.9% | −41% |
+| **base+orth — EW composite** | 21.4% | **1.00** | **21.4%** | **−36%** |
+| base — IC-weighted | 3.7% | 0.14 | 27.5% | −49% |
+| base+orth — IC-weighted | 10.8% | 0.42 | 26.0% | −49% |
+| base — GBR | 24.0% | 0.86 | 28.0% | −34% |
+| base+orth — GBR | 13.1% | 0.58 | 22.6% | −38% |
 
-**Takeaways (honest):**
+## Larger universe (88 stocks, 2013–2017)
 
-- The orthogonal factors improve the **long-only, risk-adjusted** result via
-  diversification: the equal-weight composite's Sharpe rises 0.90 → **1.00** and
-  volatility falls 29.9% → 21.4% — better risk, *not* higher raw return.
-- They **hurt the ML and long-short** versions: 9 features on only 30 stocks
-  overfit, and the long-short alpha collapses. More factors need a bigger
-  universe.
-- Directional return is still dominated by one or two strong factors
-  (volatility / illiquidity); the simple composite remains hard to beat.
-- General lesson: orthogonalisation buys *diversification*, not free return, and
-  model complexity is not free on a small cross-section.
+`build_universe.py` pulls a real 88-stock US panel (StockNet dataset, committed
+on GitHub and reachable from the sandbox) — ~3× the names, an independent period.
+Long book, same identical-window protocol:
+
+| strategy (88 stocks, 49-period window) | ann. return | Sharpe | ann. vol | max DD |
+|----------------------------------------|------------:|-------:|---------:|-------:|
+| Benchmark (EW all 88) | 12.8% | 1.52 | 8.4% | −10% |
+| base — EW composite | 12.0% | 1.01 | 11.9% | −15% |
+| **base+orth — EW composite** | 13.8% | **1.70** | **8.1%** | **−8%** |
+| base — IC-weighted | 11.2% | 0.92 | 12.2% | −20% |
+| base+orth — IC-weighted | 10.2% | 1.01 | 10.1% | −10% |
+| base — GBR | 15.8% | 1.31 | 12.0% | −14% |
+| base+orth — GBR | 8.2% | 0.82 | 9.9% | −15% |
+
+**Takeaways (honest, across both universes):**
+
+- **Orthogonal factors help the equal-weight long composite in both universes**
+  (Sharpe 0.90 → 1.00 on 30 names; **1.01 → 1.70** on 88 names). The lift is
+  larger on the bigger universe — diversification needs breadth — and there the
+  base+orth composite (Sharpe 1.70) *beats the strong benchmark* (1.52).
+- **IC-weighting did not beat plain equal-weighting in either universe.**
+  Weighting by IC *magnitude* amplifies the noise in the IC estimates; with few,
+  noisy factors the sign-only equal weight is more robust. An honest negative
+  result for the IC-weighting idea as implemented.
+- **Long-short alpha is weak-to-negative** everywhere: these large-cap universes
+  have low cross-sectional dispersion, so most of the edge (and a lot of market
+  beta) lives in the long book, not in shorting the bottom.
+- A bigger universe sharply raises the benchmark's Sharpe (less idiosyncratic
+  noise) and makes the orthogonal-factor edge clearer — breadth matters more than
+  model complexity.
 
 ## Possible next steps
 
-- **Bigger universe** (hundreds of names) — the single biggest lever; it gives
-  both cross-sectional ranking and ML room to work, and lets the orthogonal
-  factors pay off in the long-short book.
+- Even bigger universe (hundreds of names) and a higher-dispersion universe
+  (small/mid caps) so the long-short book has something to short.
+- Try **ICIR-weighting** (mean IC / IC std) or shrinkage instead of raw
+  IC-magnitude weighting, which was too noisy here.
 - Fundamental factors (value, quality, earnings) for IC that is truly
   independent of the price/volume block — needs a fundamentals data source.
 - Transaction costs / turnover control, and risk-adjusted (vol-target) sizing.
-- IC-weighted (not equal-weight) factor blending so strong factors aren't diluted.
