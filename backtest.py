@@ -5,12 +5,14 @@ Pipeline
 --------
 1. Cross-sectional standardisation: z-score every factor within each date, so
    that on any given day the factors are comparable across the universe.
-2. Signal synthesis (four models, all strictly walk-forward / no look-ahead):
+2. Signal synthesis (five models, all strictly walk-forward / no look-ahead):
      - EW   : equal-weight composite of the z-scored factors, each factor
               signed by the SIGN of its expanding-window IC up to the
               rebalance date (so the direction is learned from the past only).
      - ICW  : IC-weighted composite — weight each factor by its expanding-window
               mean IC (sign AND magnitude), so stronger factors count for more.
+     - ICIR : IC/IR-weighted composite — weight by mean(IC)/std(IC), rewarding
+              factors whose edge is STABLE and penalising noisy ones.
      - Ridge: linear model, retrained on an expanding window at each rebalance.
      - GBR  : gradient-boosted trees, same walk-forward protocol.
 3. Portfolio construction: every REBAL trading days, rank stocks by the model
@@ -108,12 +110,14 @@ def _daily_ic(df: pd.DataFrame, zcol: str) -> pd.Series:
             .dropna())
 
 
-def score_ic_weighted(df: pd.DataFrame, rebal_dates, features) -> pd.DataFrame:
-    """IC-weighted composite: weight each factor's z-score by its expanding-
-    window mean rank IC (sign AND magnitude). Stronger, more reliable factors
-    get more weight; weak ones are down-weighted instead of equal-weighted.
-    All weights use only ICs whose forward window has realised before the
-    rebalance date, so there is no look-ahead."""
+def _score_weighted(df: pd.DataFrame, rebal_dates, features, scheme: str) -> pd.DataFrame:
+    """Composite where each factor's z-score is weighted by an expanding-window
+    statistic of its own rank IC. Scheme:
+      'ic'   -> weight = mean(IC)            (sign and magnitude)
+      'icir' -> weight = mean(IC)/std(IC)    (rewards STABLE factors, penalises
+                                              noisy ones — Information Ratio)
+    Weights use only ICs whose forward window has realised before the rebalance
+    date, so there is no look-ahead."""
     zcols = [f + "_z" for f in features]
     ic_series = {zc: _daily_ic(df, zc) for zc in zcols}  # computed once
     dates = np.sort(df["date"].unique())
@@ -125,14 +129,27 @@ def score_ic_weighted(df: pd.DataFrame, rebal_dates, features) -> pd.DataFrame:
         cutoff = dates[ti - HORIZON] if ti >= HORIZON else dates[0]
         weights = {}
         for zc in zcols:
-            s = ic_series[zc]
-            past = s[s.index <= cutoff]
-            weights[zc] = past.mean() if len(past) else 0.0
+            past = ic_series[zc][ic_series[zc].index <= cutoff]
+            if len(past) < 2:
+                w = 0.0
+            elif scheme == "icir":
+                sd = past.std()
+                w = past.mean() / sd if sd > 0 else 0.0
+            else:  # 'ic'
+                w = past.mean()
+            weights[zc] = w if np.isfinite(w) else 0.0
         cur = df[df["date"] == t].dropna(subset=zcols).copy()
-        cur["score"] = sum((weights[zc] if np.isfinite(weights[zc]) else 0.0)
-                           * cur[zc] for zc in zcols)
+        cur["score"] = sum(weights[zc] * cur[zc] for zc in zcols)
         out.append(cur[["date", "code", "score", "fwd_ret"]])
     return pd.concat(out, ignore_index=True)
+
+
+def score_ic_weighted(df, rebal_dates, features):
+    return _score_weighted(df, rebal_dates, features, "ic")
+
+
+def score_icir_weighted(df, rebal_dates, features):
+    return _score_weighted(df, rebal_dates, features, "icir")
 
 
 def score_model(df: pd.DataFrame, rebal_dates, make_model, features) -> pd.DataFrame:
@@ -221,6 +238,7 @@ def _models():
     return {
         "EW_composite": ("ew", None),
         "IC_weighted":  ("icw", None),
+        "ICIR_weighted": ("icir", None),
         "Ridge":        ("model", lambda: Ridge(alpha=10.0)),
         "GBR":          ("model", lambda: HistGradientBoostingRegressor(
             max_iter=200, max_depth=2, learning_rate=0.03,
@@ -236,6 +254,8 @@ def run_feature_set(df: pd.DataFrame, rebal, features: list[str]) -> dict:
             sc = score_equal_weight(df, rebal, features)
         elif kind == "icw":
             sc = score_ic_weighted(df, rebal, features)
+        elif kind == "icir":
+            sc = score_icir_weighted(df, rebal, features)
         else:
             sc = score_model(df, rebal, maker, features)
         long_r, ls_r = portfolio_returns(sc)
