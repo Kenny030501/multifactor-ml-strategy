@@ -1,6 +1,23 @@
+"""
+DEPRECATED / DANGEROUS — do not run.
+
+This script builds a *synthetic* panel by copying the single stock 600519 five
+times and adding random noise. It was an early scaffold before real data was
+available. The project now uses a real 30-stock US panel in data_panel.parquet
+(fetched separately), so running this would OVERWRITE the real data with noise.
+
+Kept only for historical reference. The guard below refuses to run if the real
+panel already exists.
+"""
 import os
+import sys
 import pandas as pd
 import numpy as np
+
+if os.path.exists("data_panel.parquet"):
+    sys.exit("Refusing to run: data_panel.parquet already exists (would be "
+             "overwritten with synthetic data). Delete this guard intentionally "
+             "if you really want the synthetic scaffold.")
 
 df = pd.read_csv("data_600519.csv")
 df = df.rename(columns={'日期':'date','开盘':'open','最高':'high','最低':'low','收盘':'close','成交量':'volume'})
