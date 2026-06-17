@@ -25,6 +25,7 @@ rigorous out-of-sample backtesting.
 | 2. Validate factors (rank IC) | `compute_ic.py` | console report |
 | 3. Build orthogonal factors | `factor_orthogonal.py` | `factor_panel_ext.parquet` |
 | 4. Backtest the strategy | `backtest.py` | console report |
+| 5. Cost / turnover check | `transaction_costs.py` | console report |
 | (opt) Larger universe | `build_universe.py` | `factor_panel_large_ext.parquet` |
 
 `factor_lib.py` holds the shared, universe-agnostic factor definitions used by
@@ -153,6 +154,22 @@ Long book, same identical-window protocol:
 - A bigger universe sharply raises the benchmark's Sharpe (less idiosyncratic
   noise) and makes the orthogonal-factor edge clearer — breadth matters more than
   model complexity.
+
+## Transaction costs (`transaction_costs.py`)
+
+A Sharpe means nothing without knowing the turnover behind it. The equal-weight
+composite turns over ~8× per year (≈66–70% of the book replaced each monthly
+rebalance — moderate for a monthly signal). Net Sharpe of the **base+orth**
+long book after realistic per-side costs:
+
+| cost / side | 30-stock net Sharpe | 88-stock net Sharpe |
+|-------------|--------------------:|--------------------:|
+| 0 bps (gross) | 1.00 | 1.70 |
+| 10 bps | 0.91 | 1.45 |
+| 20 bps | 0.82 | 1.22 |
+
+The edge **survives** realistic costs (≈10 bps/side is reasonable for liquid US
+large caps) — the backtest is not just paying itself in turnover.
 
 ## Possible next steps
 
