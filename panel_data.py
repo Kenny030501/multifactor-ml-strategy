@@ -20,8 +20,7 @@ if os.path.exists("data_panel.parquet"):
              "if you really want the synthetic scaffold.")
 
 df = pd.read_csv("data_600519.csv")
-df = df.rename(columns={'日期':'date','开盘':'open','最高':'high','最低':'low','收盘':'close','成交量':'volume'})
-df = df[['date','open','high','low','close','volume']]
+df = df[['date', 'open', 'high', 'low', 'close', 'volume']]
 
 np.random.seed(42)
 frames = []

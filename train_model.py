@@ -4,11 +4,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 
 df = pd.read_csv("factor_600519.csv")
-df["日期"] = pd.to_datetime(df["日期"])
-df = df.sort_values("日期").reset_index(drop=True)
+df["date"] = pd.to_datetime(df["date"])
+df = df.sort_values("date").reset_index(drop=True)
 
 # Target: future 20-day return
-df["future_return_20d"] = df["收盘"].shift(-20) / df["收盘"] - 1
+df["future_return_20d"] = df["close"].shift(-20) / df["close"] - 1
 
 # Features and target
 feature_cols = ["momentum_20d", "reversal_5d", "volatility_20d"]
