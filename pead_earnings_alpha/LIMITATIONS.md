@@ -34,9 +34,9 @@ data and carries the caveats below.
 - **Single regime / short sample** inherited from the price panels.
 
 ## Methodology caveats
-- **No transaction costs yet** in `backtest_pead.py` (project 1's
-  `transaction_costs.py` pattern should be applied; PEAD turnover is high because
-  the signal refreshes every quarter).
+- **Transaction costs are modelled** in `backtest_pead.py` (one-way turnover of
+  both legs × per-side bps); on the synthetic check the long-short Sharpe is
+  robust to 20 bps/side, but real turnover/cost must be re-checked on real data.
 - **Significance not yet adjusted** for overlapping returns or multiple testing
   (same issues documented in project 1's `LIMITATIONS.md`).
 - **Long book carries beta**; the long-short row is the cleaner read of the

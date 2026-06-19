@@ -48,17 +48,31 @@ def backtest(df: pd.DataFrame, factor: str):
     dates = np.sort(df["date"].unique())
     rebal = dates[::REBAL]
     long_r, ls_r, bench_r, idx = [], [], [], []
+    longs, shorts = [], []                       # holding sets, for turnover
     for t in rebal:
         g = df[(df["date"] == t)].dropna(subset=[factor, "fwd_ret"])
         k = max(1, int(round(len(g) * TOP_FRAC)))
         if len(g) < 2 * k:
             continue
         g = g.sort_values(factor, ascending=False)
-        top = g.head(k)["fwd_ret"].mean()
-        bot = g.tail(k)["fwd_ret"].mean()
-        long_r.append(top); ls_r.append(top - bot)
+        long_r.append(g.head(k)["fwd_ret"].mean())
+        ls_r.append(g.head(k)["fwd_ret"].mean() - g.tail(k)["fwd_ret"].mean())
         bench_r.append(g["fwd_ret"].mean()); idx.append(t)
-    return (pd.Series(long_r, idx), pd.Series(ls_r, idx), pd.Series(bench_r, idx))
+        longs.append(set(g.head(k)["code"])); shorts.append(set(g.tail(k)["code"]))
+    return (pd.Series(long_r, idx), pd.Series(ls_r, idx), pd.Series(bench_r, idx),
+            longs, shorts)
+
+
+def turnover(holdings: list) -> pd.Series:
+    """One-way fraction of the book replaced each rebalance (1.0 to establish)."""
+    t = [1.0] + [len(c - p) / len(c) for p, c in zip(holdings[:-1], holdings[1:])]
+    return pd.Series(t)
+
+
+def net_long_short(ls: pd.Series, longs, shorts, bps: float) -> pd.Series:
+    """Subtract trading cost from both legs each rebalance."""
+    cost = (turnover(longs).values + turnover(shorts).values) * (bps / 1e4)
+    return pd.Series(ls.values - cost, index=ls.index)
 
 
 def main() -> None:
@@ -69,14 +83,20 @@ def main() -> None:
           f"| rebalance {REBAL}d, hold {HORIZON}d, top/bottom {int(TOP_FRAC*100)}%\n")
 
     rows = {}
+    cost_rows = {}
     for factor in ["sue_z", "sue_orth"]:
-        long_r, ls_r, bench = backtest(df, factor)
+        long_r, ls_r, bench, longs, shorts = backtest(df, factor)
         rows[f"{factor} | long"] = metrics(long_r)
         rows[f"{factor} | long-short"] = metrics(ls_r)
         if factor == "sue_z":
             rows["Benchmark (EW all)"] = metrics(bench)
-        ab = alpha_beta(long_r, bench)
-        rows[f"{factor} | long"].update(ab)
+        rows[f"{factor} | long"].update(alpha_beta(long_r, bench))
+        # net-of-cost long-short Sharpe at several per-side cost levels
+        ann_to = (turnover(longs).mean() + turnover(shorts).mean()) * PERIODS_PER_YEAR
+        cost_rows[factor] = {"ann_turnover(x)": ann_to,
+                             **{f"net Sharpe @{b}bps": metrics(
+                                 net_long_short(ls_r, longs, shorts, b)).get("sharpe")
+                                for b in [0, 10, 20]}}
 
     table = pd.DataFrame(rows).T
     for c in ["ann_return", "max_drawdown", "win_rate", "ann_alpha"]:
@@ -88,6 +108,12 @@ def main() -> None:
     table["n"] = table["n"].astype("Int64")
     pd.set_option("display.width", 200)
     print(table.to_string())
+
+    ct = pd.DataFrame(cost_rows).T
+    for c in ct.columns:
+        ct[c] = ct[c].map(lambda v: f"{v:5.2f}" if pd.notna(v) else "")
+    print("\nLong-short turnover & net-of-cost Sharpe:")
+    print(ct.to_string())
     print("\nlong-short isolates the earnings signal; the long book also carries beta.")
 
 
