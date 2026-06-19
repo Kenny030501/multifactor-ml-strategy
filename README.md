@@ -10,6 +10,12 @@ below is out-of-sample (no look-ahead), and the negative results are reported as
 prominently as the positive ones. A companion [`LIMITATIONS.md`](LIMITATIONS.md)
 states exactly what this study does and does not establish.
 
+> **Project 2 (event-driven, fundamental):**
+> [`pead_earnings_alpha/`](pead_earnings_alpha/) builds a Post-Earnings-
+> Announcement-Drift signal from **point-in-time SEC EDGAR filings** and runs it
+> through this same engine — the independent, fundamental alpha source this
+> project's limitations call for.
+
 ---
 
 ## Key findings (read first)
