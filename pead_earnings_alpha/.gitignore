@@ -1,3 +1,0 @@
-# Generated data panels (synthetic verification output OR real EDGAR output).
-# Regenerate with make_synthetic.py, or produce the real one with fetch_edgar.py.
-*.parquet
